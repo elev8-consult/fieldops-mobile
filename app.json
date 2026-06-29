@@ -1,16 +1,22 @@
 {
   "expo": {
-    "name": "fieldops-mobile",
+    "name": "FieldOps",
     "slug": "fieldops-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "fieldopsmobile",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
+    "extra": {
+      "apiUrl": "https://fieldops-api-production.up.railway.app"
+    },
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.fieldops.mobile",
+      "supportsTablet": true
     },
     "android": {
+      "package": "com.fieldops.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -25,6 +31,12 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "FieldOps uses the camera to scan product barcodes."
+        }
+      ],
       [
         "expo-splash-screen",
         {
