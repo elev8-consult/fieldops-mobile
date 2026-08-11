@@ -8,7 +8,11 @@
     "scheme": "fieldopsmobile",
     "userInterfaceStyle": "light",
     "extra": {
-      "apiUrl": "https://fieldops-api-production.up.railway.app"
+      "apiUrl": "https://fieldops-api-production.up.railway.app",
+      "router": {},
+      "eas": {
+        "projectId": "d48901f3-7fc8-4ae4-a548-51f6ac7e244e"
+      }
     },
     "ios": {
       "icon": "./assets/expo.icon",
@@ -23,7 +27,11 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -46,7 +54,8 @@
             "imageWidth": 76
           }
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,

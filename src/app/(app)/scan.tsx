@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import {
   CameraView,
@@ -19,8 +19,9 @@ import {
 import { Button } from '@/components/Button';
 import { ItemEntrySheet, type NewItem } from '@/components/ItemEntrySheet';
 import { apiErrorMessage } from '@/lib/api';
-import { fetchProductByBarcode, type Product } from '@/lib/catalog';
+import { resolveBarcode, type Product } from '@/lib/catalog';
 import { submitVisit } from '@/lib/reports';
+import { useQueueStore } from '@/store/queue.store';
 import { useVisitStore } from '@/store/visit.store';
 import { colors, font, radius, spacing } from '@/theme';
 
@@ -35,8 +36,18 @@ const BARCODE_TYPES = [
   'itf14',
 ] as const;
 
+/** True when the request never reached the server (no connectivity). */
+function isOffline(err: unknown): boolean {
+  return (
+    axios.isAxiosError(err) &&
+    (!err.response || err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK')
+  );
+}
+
 export default function ScanScreen() {
   const router = useRouter();
+  const qc = useQueryClient();
+  const enqueue = useQueueStore((s) => s.enqueue);
   const outlet = useVisitStore((s) => s.outlet);
   const items = useVisitStore((s) => s.items);
   const addItem = useVisitStore((s) => s.addItem);
@@ -68,14 +79,11 @@ export default function ScanScreen() {
 
     setLooking(true);
     try {
-      const product = await fetchProductByBarcode(code);
+      // Checks the offline cache first, then the server.
+      const { product } = await resolveBarcode(code);
       setEntry({ barcode: code, product });
     } catch (e) {
-      if (axios.isAxiosError(e) && e.response?.status === 404) {
-        setEntry({ barcode: code, product: null }); // unknown → manual entry
-      } else {
-        Alert.alert('Lookup failed', apiErrorMessage(e));
-      }
+      Alert.alert('Lookup failed', apiErrorMessage(e));
     } finally {
       setLooking(false);
     }
@@ -93,8 +101,8 @@ export default function ScanScreen() {
   }
 
   const submit = useMutation({
-    mutationFn: () =>
-      submitVisit({
+    mutationFn: async (): Promise<{ queued: boolean }> => {
+      const payload = {
         outletId: outlet!.id,
         items: items.map((i) => ({
           productId: i.productId,
@@ -103,17 +111,43 @@ export default function ScanScreen() {
           quantity: i.quantity,
           expiryDate: i.expiryDate,
         })),
-      }),
-    onSuccess: () => {
-      Alert.alert('Visit submitted', `${items.length} item(s) saved.`, [
-        {
-          text: 'OK',
-          onPress: () => {
-            reset();
-            router.replace('/(app)/home');
+      };
+
+      try {
+        await submitVisit(payload);
+        return { queued: false };
+      } catch (err) {
+        // No network / server unreachable → keep the work safely on the device
+        // and let the sync engine deliver it once we are back online.
+        if (isOffline(err)) {
+          await enqueue({
+            outletId: payload.outletId,
+            outletName: outlet!.name,
+            items: payload.items,
+          });
+          return { queued: true };
+        }
+        throw err;
+      }
+    },
+    onSuccess: ({ queued }) => {
+      // Refresh the home screen's progress and "visited today" list.
+      void qc.invalidateQueries({ queryKey: ['mobile-summary'] });
+      Alert.alert(
+        queued ? 'Saved on your phone' : 'Visit submitted',
+        queued
+          ? `${items.length} item(s) saved. They will be sent automatically when you have internet.`
+          : `${items.length} item(s) saved.`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              reset();
+              router.replace('/(app)/home');
+            },
           },
-        },
-      ]);
+        ],
+      );
     },
     onError: (e) => Alert.alert('Submit failed', apiErrorMessage(e)),
   });

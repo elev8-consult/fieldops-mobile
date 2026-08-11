@@ -1,4 +1,6 @@
+import axios from 'axios';
 import { api } from './api';
+import { lookupCachedBarcode } from './offline/catalogCache';
 
 export interface Product {
   id: string;
@@ -30,6 +32,33 @@ export async function fetchProductByBarcode(barcode: string): Promise<Product> {
     brandId: String(data.brandId ?? data.brand_id ?? ''),
     brandName: data.brand?.name ?? null,
   };
+}
+
+export type BarcodeResolution =
+  | { product: Product; source: 'cache' | 'server' }
+  | { product: null; source: 'unknown' | 'offline' };
+
+/**
+ * Resolve a scanned barcode. Checks the offline cache first so scanning keeps
+ * working with no signal, then falls back to the server.
+ */
+export async function resolveBarcode(
+  barcode: string,
+): Promise<BarcodeResolution> {
+  const cached = lookupCachedBarcode(barcode);
+  if (cached) return { product: cached, source: 'cache' };
+
+  try {
+    const product = await fetchProductByBarcode(barcode);
+    return { product, source: 'server' };
+  } catch (e) {
+    if (axios.isAxiosError(e)) {
+      if (e.response?.status === 404) return { product: null, source: 'unknown' };
+      // No response at all → we are offline and it was not in the cache.
+      if (!e.response) return { product: null, source: 'offline' };
+    }
+    throw e;
+  }
 }
 
 /** List outlets for the visit picker (optionally filtered by search text). */
