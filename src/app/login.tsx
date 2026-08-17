@@ -38,7 +38,7 @@ export default function LoginScreen() {
       >
         <View style={styles.flex}>
           <View style={styles.header}>
-            <Text style={styles.logo}>FieldOps</Text>
+            <Text style={styles.logo}>I Prom</Text>
             <Text style={styles.title}>Sign in</Text>
             <Text style={styles.subtitle}>
               Enter your phone number. We&apos;ll send you a code.

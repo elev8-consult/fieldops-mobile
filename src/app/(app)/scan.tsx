@@ -177,7 +177,7 @@ export default function ScanScreen() {
       <View style={[styles.center, { padding: spacing.lg }]}>
         <Text style={styles.permTitle}>Camera access needed</Text>
         <Text style={styles.permText}>
-          FieldOps uses the camera to scan product barcodes.
+          I Prom uses the camera to scan product barcodes.
         </Text>
         <View style={{ height: spacing.lg }} />
         <Button label="Allow camera" onPress={requestPermission} />

@@ -1,5 +1,5 @@
 /**
- * Design tokens for FieldOps mobile.
+ * Design tokens for the I Prom mobile app.
  * Tuned for field use by non-technical staff: large text, big touch targets,
  * high contrast, generous spacing.
  */
