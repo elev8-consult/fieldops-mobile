@@ -5,8 +5,8 @@ import {
   useCameraPermissions,
   type BarcodeScanningResult,
 } from 'expo-camera';
-import { useRouter } from 'expo-router';
-import { useRef, useState } from 'react';
+import { useNavigation, useRouter } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -50,6 +50,7 @@ function isOffline(err: unknown): boolean {
 
 export default function ScanScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const qc = useQueryClient();
   const enqueue = useQueueStore((s) => s.enqueue);
   const outlet = useVisitStore((s) => s.outlet);
@@ -57,6 +58,33 @@ export default function ScanScreen() {
   const addItem = useVisitStore((s) => s.addItem);
   const removeItem = useVisitStore((s) => s.removeItem);
   const reset = useVisitStore((s) => s.reset);
+
+  // Intercept every way off this screen — header back button, iOS
+  // swipe-back gesture, and Android's hardware back button all fire the
+  // same "beforeRemove" event — and confirm before losing scanned items.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      if (items.length === 0) return;
+      e.preventDefault();
+      Alert.alert(
+        'Discard scanned items?',
+        `You have ${items.length} item${items.length === 1 ? '' : 's'} that haven't been submitted yet. If you leave now, they will be lost.`,
+        [
+          { text: 'Keep scanning', style: 'cancel' },
+          {
+            text: 'Discard',
+            style: 'destructive',
+            onPress: () => {
+              reset();
+              navigation.dispatch(e.data.action);
+            },
+          },
+        ],
+      );
+    });
+
+    return unsubscribe;
+  }, [navigation, items.length, reset]);
 
   const [permission, requestPermission] = useCameraPermissions();
   const [looking, setLooking] = useState(false);
