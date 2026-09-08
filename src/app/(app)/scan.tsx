@@ -11,9 +11,13 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { Button } from '@/components/Button';
@@ -61,6 +65,31 @@ export default function ScanScreen() {
     product: Product | null;
   } | null>(null);
   const lastScanRef = useRef<{ code: string; at: number } | null>(null);
+  // Manual barcode entry — for labels that will not scan (frost, damage, glare).
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualCode, setManualCode] = useState('');
+
+  /** Shared lookup used by both the camera and manual entry. */
+  async function lookupAndOpen(code: string) {
+    setLooking(true);
+    try {
+      // Checks the offline cache first, then the server.
+      const { product } = await resolveBarcode(code);
+      setEntry({ barcode: code, product });
+    } catch (e) {
+      Alert.alert('Lookup failed', apiErrorMessage(e));
+    } finally {
+      setLooking(false);
+    }
+  }
+
+  function submitManual() {
+    const code = manualCode.trim();
+    if (code.length < 6) return;
+    setManualOpen(false);
+    setManualCode('');
+    void lookupAndOpen(code);
+  }
 
   async function handleScan(res: BarcodeScanningResult) {
     if (looking || entry) return;
@@ -77,16 +106,7 @@ export default function ScanScreen() {
     }
     lastScanRef.current = { code, at: now };
 
-    setLooking(true);
-    try {
-      // Checks the offline cache first, then the server.
-      const { product } = await resolveBarcode(code);
-      setEntry({ barcode: code, product });
-    } catch (e) {
-      Alert.alert('Lookup failed', apiErrorMessage(e));
-    } finally {
-      setLooking(false);
-    }
+    await lookupAndOpen(code);
   }
 
   function handleAdd(item: NewItem) {
@@ -205,6 +225,15 @@ export default function ScanScreen() {
             {looking ? 'Looking up product…' : 'Point at a barcode'}
           </Text>
         </View>
+
+        {/* Escape hatch for labels that will not scan (frost, glare, damage). */}
+        <Pressable
+          style={styles.manualBtn}
+          onPress={() => setManualOpen(true)}
+          disabled={looking}
+        >
+          <Text style={styles.manualBtnText}>⌨  Type barcode instead</Text>
+        </Pressable>
       </View>
 
       <View style={styles.listSection}>
@@ -260,6 +289,65 @@ export default function ScanScreen() {
         onCancel={() => setEntry(null)}
         onAdd={handleAdd}
       />
+
+      {/* Manual barcode entry */}
+      <Modal
+        visible={manualOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setManualOpen(false)}
+      >
+        <View style={styles.manualBackdrop}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={styles.manualSheet}>
+              <Text style={styles.manualTitle}>Type the barcode</Text>
+              <Text style={styles.manualHelp}>
+                Use this when the barcode will not scan — for example if it is
+                covered in ice, torn, or blurry.
+              </Text>
+
+              <TextInput
+                style={styles.manualInput}
+                value={manualCode}
+                onChangeText={(t) => setManualCode(t.replace(/[^0-9]/g, ''))}
+                placeholder="e.g. 5410091729400"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="number-pad"
+                autoFocus
+                maxLength={14}
+                onSubmitEditing={submitManual}
+                returnKeyType="search"
+              />
+              <Text style={styles.manualCount}>
+                {manualCode.length} digits
+              </Text>
+
+              <View style={styles.manualActions}>
+                <View style={styles.flex}>
+                  <Button
+                    label="Cancel"
+                    variant="secondary"
+                    onPress={() => {
+                      setManualOpen(false);
+                      setManualCode('');
+                    }}
+                  />
+                </View>
+                <View style={{ width: spacing.md }} />
+                <View style={styles.flex}>
+                  <Button
+                    label="Find product"
+                    onPress={submitManual}
+                    disabled={manualCode.trim().length < 6}
+                  />
+                </View>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -310,6 +398,64 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderRadius: radius.pill,
     overflow: 'hidden',
+  },
+
+  // ── Manual barcode entry ────────────────────────────────────────────
+  manualBtn: {
+    position: 'absolute',
+    bottom: spacing.md,
+    alignSelf: 'center',
+    minHeight: 48,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+  },
+  manualBtnText: {
+    color: colors.text,
+    fontSize: font.label,
+    fontWeight: '700',
+  },
+  manualBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  manualSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    padding: spacing.lg,
+  },
+  manualTitle: { fontSize: font.h2, fontWeight: '800', color: colors.text },
+  manualHelp: {
+    fontSize: font.small,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+    lineHeight: 20,
+  },
+  manualInput: {
+    minHeight: font.tapTarget,
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md,
+    fontSize: font.h2,
+    letterSpacing: 1,
+    color: colors.text,
+    marginTop: spacing.lg,
+  },
+  manualCount: {
+    fontSize: font.small,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+    textAlign: 'right',
+  },
+  manualActions: {
+    flexDirection: 'row',
+    marginTop: spacing.lg,
+    marginBottom: spacing.md,
   },
   listSection: { flex: 1, padding: spacing.lg },
   listTitle: {

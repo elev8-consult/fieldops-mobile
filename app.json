@@ -2,6 +2,7 @@
   "expo": {
     "name": "I Prom",
     "slug": "fieldops-mobile",
+    "owner": "abkrami1",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -11,7 +12,7 @@
       "apiUrl": "https://fieldops-api-production.up.railway.app",
       "router": {},
       "eas": {
-        "projectId": "d48901f3-7fc8-4ae4-a548-51f6ac7e244e"
+        "projectId": "51d291ca-e293-4bcf-8a38-9a1c345c74aa"
       }
     },
     "ios": {
