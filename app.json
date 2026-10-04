@@ -16,7 +16,7 @@
       }
     },
     "ios": {
-      "bundleIdentifier": "com.fieldops.mobile",
+      "bundleIdentifier": "com.ipromagency.fieldops",
       "supportsTablet": false,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
