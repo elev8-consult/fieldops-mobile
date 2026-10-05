@@ -6,6 +6,7 @@ import {
   type BarcodeScanningResult,
 } from 'expo-camera';
 import { useNavigation, useRouter } from 'expo-router';
+import { usePreventRemove } from 'expo-router/react-navigation';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -24,7 +25,7 @@ import { Button } from '@/components/Button';
 import { ItemEntrySheet, type NewItem } from '@/components/ItemEntrySheet';
 import { apiErrorMessage } from '@/lib/api';
 import { resolveBarcode, type Product } from '@/lib/catalog';
-import { submitVisit } from '@/lib/reports';
+import { newSubmissionId, submitVisit } from '@/lib/reports';
 import { useQueueStore } from '@/store/queue.store';
 import { useVisitStore } from '@/store/visit.store';
 import { colors, font, radius, spacing } from '@/theme';
@@ -59,32 +60,30 @@ export default function ScanScreen() {
   const removeItem = useVisitStore((s) => s.removeItem);
   const reset = useVisitStore((s) => s.reset);
 
-  // Intercept every way off this screen — header back button, iOS
-  // swipe-back gesture, and Android's hardware back button all fire the
-  // same "beforeRemove" event — and confirm before losing scanned items.
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
-      if (items.length === 0) return;
-      e.preventDefault();
-      Alert.alert(
-        'Discard scanned items?',
-        `You have ${items.length} item${items.length === 1 ? '' : 's'} that haven't been submitted yet. If you leave now, they will be lost.`,
-        [
-          { text: 'Keep scanning', style: 'cancel' },
-          {
-            text: 'Discard',
-            style: 'destructive',
-            onPress: () => {
-              reset();
-              navigation.dispatch(e.data.action);
-            },
+  // usePreventRemove (not a bare beforeRemove listener) is required so the
+  // native iOS back button and swipe gesture are blocked, not just reported.
+  const [leaving, setLeaving] = useState(false);
+  usePreventRemove(items.length > 0 && !leaving, ({ data }) => {
+    Alert.alert(
+      'Discard scanned items?',
+      `You have ${items.length} item${items.length === 1 ? '' : 's'} that haven't been submitted yet. If you leave now, they will be lost.`,
+      [
+        { text: 'Keep scanning', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            reset();
+            navigation.dispatch(data.action);
           },
-        ],
-      );
-    });
+        },
+      ],
+    );
+  });
 
-    return unsubscribe;
-  }, [navigation, items.length, reset]);
+  useEffect(() => {
+    if (leaving) router.replace('/(app)/home');
+  }, [leaving, router]);
 
   const [permission, requestPermission] = useCameraPermissions();
   const [looking, setLooking] = useState(false);
@@ -152,6 +151,7 @@ export default function ScanScreen() {
     mutationFn: async (): Promise<{ queued: boolean }> => {
       const payload = {
         outletId: outlet!.id,
+        clientSubmissionId: newSubmissionId(),
         items: items.map((i) => ({
           productId: i.productId,
           barcode: i.barcode,
@@ -172,6 +172,7 @@ export default function ScanScreen() {
             outletId: payload.outletId,
             outletName: outlet!.name,
             items: payload.items,
+            clientSubmissionId: payload.clientSubmissionId,
           });
           return { queued: true };
         }
@@ -191,7 +192,7 @@ export default function ScanScreen() {
             text: 'OK',
             onPress: () => {
               reset();
-              router.replace('/(app)/home');
+              setLeaving(true);
             },
           },
         ],

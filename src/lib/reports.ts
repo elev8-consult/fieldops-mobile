@@ -11,6 +11,12 @@ export interface VisitItemPayload {
 export interface SubmitVisitPayload {
   outletId: string;
   items: VisitItemPayload[];
+  /** Same value on every retry of one visit, so the server can drop duplicates. */
+  clientSubmissionId?: string;
+}
+
+export function newSubmissionId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 export interface SummaryOutlet {

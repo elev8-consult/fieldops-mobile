@@ -8,6 +8,7 @@ export interface QueuedVisit {
   outletId: string;
   outletName: string;
   items: VisitItemPayload[];
+  clientSubmissionId?: string;
   createdAt: string;
   attempts: number;
   lastError: string | null;
@@ -71,7 +72,11 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
     for (const visit of queue) {
       try {
-        await submitVisit({ outletId: visit.outletId, items: visit.items });
+        await submitVisit({
+          outletId: visit.outletId,
+          items: visit.items,
+          clientSubmissionId: visit.clientSubmissionId,
+        });
         sent += 1;
       } catch (err) {
         failed += 1;
