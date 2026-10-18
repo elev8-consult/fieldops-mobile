@@ -6,6 +6,7 @@ export const KEYS = {
   catalogSyncedAt: 'fieldops.catalog.syncedAt.v1',
   queue: 'fieldops.queue.v1',
   outlets: 'fieldops.outlets.v1',
+  visits: 'fieldops.visits.v1',
 } as const;
 
 export async function readJson<T>(key: string): Promise<T | null> {

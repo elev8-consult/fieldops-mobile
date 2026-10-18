@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { api } from './api';
 import { lookupCachedBarcode } from './offline/catalogCache';
+import { isOnline } from './offline/network';
 
 export interface Product {
   id: string;
@@ -47,6 +48,9 @@ export async function resolveBarcode(
 ): Promise<BarcodeResolution> {
   const cached = lookupCachedBarcode(barcode);
   if (cached) return { product: cached, source: 'cache' };
+  // Cache miss while offline used to wait out the request timeout (20s on
+  // Android) with the camera frozen on "Looking up product…".
+  if (!isOnline()) return { product: null, source: 'offline' };
 
   try {
     const product = await fetchProductByBarcode(barcode);

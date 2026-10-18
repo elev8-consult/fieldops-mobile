@@ -1,5 +1,8 @@
 import axios from 'axios';
 import { API_BASE_URL } from './config';
+import { isOnline, networkSignal, startNetworkMonitor } from './offline/network';
+
+startNetworkMonitor();
 
 /**
  * Shared axios instance. The JWT is held in memory and attached on every
@@ -18,6 +21,19 @@ export const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
+  // Fail before opening a socket. On Android a request to an unreachable
+  // host otherwise sits until `timeout`, and several of those at once
+  // stall the screen.
+  if (!isOnline()) {
+    return Promise.reject(
+      new axios.AxiosError(
+        'No internet connection. Please try again.',
+        'ERR_NETWORK',
+        config,
+      ),
+    );
+  }
+  config.signal = networkSignal();
   if (authToken) {
     config.headers.Authorization = `Bearer ${authToken}`;
   }

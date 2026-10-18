@@ -22,12 +22,13 @@ import {
   View,
 } from 'react-native';
 import { Button } from '@/components/Button';
-import { ItemEntrySheet, type NewItem } from '@/components/ItemEntrySheet';
+import { ItemEntrySheet, type ExistingLine, type NewItem } from '@/components/ItemEntrySheet';
 import { apiErrorMessage } from '@/lib/api';
 import { resolveBarcode, type Product } from '@/lib/catalog';
-import { newSubmissionId, submitVisit } from '@/lib/reports';
+import { beirutToday, writeVisitCache } from '@/lib/offline/visitCache';
+import { newSubmissionId, saveVisit } from '@/lib/reports';
 import { useQueueStore } from '@/store/queue.store';
-import { useVisitStore } from '@/store/visit.store';
+import { useVisitStore, type VisitItem } from '@/store/visit.store';
 import { colors, font, radius, spacing } from '@/theme';
 
 const BARCODE_TYPES = [
@@ -54,9 +55,12 @@ export default function ScanScreen() {
   const navigation = useNavigation();
   const qc = useQueryClient();
   const enqueue = useQueueStore((s) => s.enqueue);
+  const discardOutlet = useQueueStore((s) => s.discardOutlet);
   const outlet = useVisitStore((s) => s.outlet);
   const items = useVisitStore((s) => s.items);
+  const editing = useVisitStore((s) => s.editing);
   const addItem = useVisitStore((s) => s.addItem);
+  const updateItem = useVisitStore((s) => s.updateItem);
   const removeItem = useVisitStore((s) => s.removeItem);
   const reset = useVisitStore((s) => s.reset);
 
@@ -66,7 +70,7 @@ export default function ScanScreen() {
   usePreventRemove(items.length > 0 && !leaving, ({ data }) => {
     Alert.alert(
       'Discard scanned items?',
-      `You have ${items.length} item${items.length === 1 ? '' : 's'} that haven't been submitted yet. If you leave now, they will be lost.`,
+      `You have ${items.length} item${items.length === 1 ? '' : 's'} that ${editing ? "aren't saved yet" : "haven't been submitted yet"}. If you leave now, your changes will be lost.`,
       [
         { text: 'Keep scanning', style: 'cancel' },
         {
@@ -90,11 +94,47 @@ export default function ScanScreen() {
   const [entry, setEntry] = useState<{
     barcode: string;
     product: Product | null;
+    existing: ExistingLine | null;
   } | null>(null);
   const lastScanRef = useRef<{ code: string; at: number } | null>(null);
   // Manual barcode entry — for labels that will not scan (frost, damage, glare).
   const [manualOpen, setManualOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
+
+  /** A product already on this visit, so a new scan adds to it. */
+  function findExisting(
+    productId: string | null,
+    barcode: string,
+  ): VisitItem | undefined {
+    const matches = productId
+      ? items.filter((i) => i.productId === productId)
+      : items.filter((i) => !i.productId && i.barcode === barcode);
+    return matches.find((i) => !i.expiryDate) ?? matches[0];
+  }
+
+  function openLine(item: VisitItem) {
+    const product: Product | null = item.productId
+      ? {
+          id: item.productId,
+          canonicalName: item.productName,
+          sku: null,
+          barcode: item.barcode,
+          unit: null,
+          brandId: '',
+          brandName: null,
+        }
+      : null;
+    setEntry({
+      barcode: item.barcode ?? '',
+      product,
+      existing: {
+        key: item.key,
+        quantity: item.quantity,
+        expiryDate: item.expiryDate,
+        productName: item.productName,
+      },
+    });
+  }
 
   /** Shared lookup used by both the camera and manual entry. */
   async function lookupAndOpen(code: string) {
@@ -102,7 +142,19 @@ export default function ScanScreen() {
     try {
       // Checks the offline cache first, then the server.
       const { product } = await resolveBarcode(code);
-      setEntry({ barcode: code, product });
+      const match = findExisting(product?.id ?? null, code);
+      setEntry({
+        barcode: code,
+        product,
+        existing: match
+          ? {
+              key: match.key,
+              quantity: match.quantity,
+              expiryDate: match.expiryDate,
+              productName: match.productName,
+            }
+          : null,
+      });
     } catch (e) {
       Alert.alert('Lookup failed', apiErrorMessage(e));
     } finally {
@@ -136,33 +188,50 @@ export default function ScanScreen() {
     await lookupAndOpen(code);
   }
 
-  function handleAdd(item: NewItem) {
-    addItem({
+  function handleAdd(item: NewItem & { replaceKey?: string }) {
+    const next = {
       productId: item.productId,
       barcode: item.barcode,
       productName: item.productName,
       quantity: item.quantity,
       expiryDate: item.expiryDate,
-    });
+    };
+    if (item.replaceKey) updateItem(item.replaceKey, next);
+    else addItem(next);
     setEntry(null);
   }
 
   const submit = useMutation({
     mutationFn: async (): Promise<{ queued: boolean }> => {
+      const state = useVisitStore.getState();
+      const clientSubmissionId =
+        state.clientSubmissionId ?? newSubmissionId();
+      if (!state.clientSubmissionId) {
+        useVisitStore.setState({ clientSubmissionId });
+      }
+      const payloadItems = items.map((i) => ({
+        productId: i.productId,
+        barcode: i.barcode,
+        productNameRaw: i.productName,
+        quantity: i.quantity,
+        expiryDate: i.expiryDate,
+      }));
       const payload = {
         outletId: outlet!.id,
-        clientSubmissionId: newSubmissionId(),
-        items: items.map((i) => ({
-          productId: i.productId,
-          barcode: i.barcode,
-          productNameRaw: i.productName,
-          quantity: i.quantity,
-          expiryDate: i.expiryDate,
-        })),
+        clientSubmissionId,
+        items: payloadItems,
+      };
+      const cache = {
+        date: beirutToday(),
+        outletId: payload.outletId,
+        clientSubmissionId,
+        items: payloadItems,
       };
 
       try {
-        await submitVisit(payload);
+        await saveVisit(payload);
+        await writeVisitCache(cache);
+        await discardOutlet(payload.outletId);
         return { queued: false };
       } catch (err) {
         // No network / server unreachable → keep the work safely on the device
@@ -174,6 +243,7 @@ export default function ScanScreen() {
             items: payload.items,
             clientSubmissionId: payload.clientSubmissionId,
           });
+          await writeVisitCache(cache);
           return { queued: true };
         }
         throw err;
@@ -182,11 +252,14 @@ export default function ScanScreen() {
     onSuccess: ({ queued }) => {
       // Refresh the home screen's progress and "visited today" list.
       void qc.invalidateQueries({ queryKey: ['mobile-summary'] });
+      const count = items.length;
       Alert.alert(
-        queued ? 'Saved on your phone' : 'Visit submitted',
+        queued ? 'Saved on your phone' : editing ? 'Visit updated' : 'Visit submitted',
         queued
-          ? `${items.length} item(s) saved. They will be sent automatically when you have internet.`
-          : `${items.length} item(s) saved.`,
+          ? `${count} item(s) saved. They will be sent automatically when you have internet.`
+          : editing
+            ? `${count} item(s) saved for this store.`
+            : `${count} item(s) saved.`,
         [
           {
             text: 'OK',
@@ -204,11 +277,16 @@ export default function ScanScreen() {
   function confirmSubmit() {
     if (items.length === 0) return;
     Alert.alert(
-      'Submit visit?',
-      `Send ${items.length} item(s) for ${outlet?.name ?? 'this outlet'}?`,
+      editing ? 'Update this visit?' : 'Submit visit?',
+      editing
+        ? `Save ${items.length} item(s) for ${outlet?.name ?? 'this outlet'}? This updates what you already sent today.`
+        : `Send ${items.length} item(s) for ${outlet?.name ?? 'this outlet'}?`,
       [
         { text: 'Keep scanning', style: 'cancel' },
-        { text: 'Submit', onPress: () => submit.mutate() },
+        {
+          text: editing ? 'Save' : 'Submit',
+          onPress: () => submit.mutate(),
+        },
       ],
     );
   }
@@ -240,6 +318,11 @@ export default function ScanScreen() {
         <Text style={styles.bannerText} numberOfLines={1}>
           📍 {outlet?.name ?? 'No outlet selected'}
         </Text>
+        {editing && (
+          <Text style={styles.bannerSub} numberOfLines={1}>
+            Adding to today’s visit
+          </Text>
+        )}
       </View>
 
       <View style={styles.cameraWrap}>
@@ -278,7 +361,7 @@ export default function ScanScreen() {
           }
           renderItem={({ item }) => (
             <View style={styles.itemRow}>
-              <View style={styles.flex}>
+              <Pressable style={styles.flex} onPress={() => openLine(item)}>
                 <Text style={styles.itemName} numberOfLines={1}>
                   {item.productName}
                   {item.productId ? '' : '  (manual)'}
@@ -286,8 +369,9 @@ export default function ScanScreen() {
                 <Text style={styles.itemMeta}>
                   Qty {item.quantity}
                   {item.expiryDate ? `  ·  exp ${item.expiryDate.slice(0, 7)}` : ''}
+                  {'  ·  tap to add'}
                 </Text>
-              </View>
+              </Pressable>
               <Pressable
                 onPress={() => removeItem(item.key)}
                 hitSlop={10}
@@ -303,7 +387,13 @@ export default function ScanScreen() {
       <View style={styles.footer}>
         <Button
           label={
-            items.length > 0 ? `Submit visit (${items.length})` : 'Submit visit'
+            items.length === 0
+              ? editing
+                ? 'Save visit'
+                : 'Submit visit'
+              : editing
+                ? `Save visit (${items.length})`
+                : `Submit visit (${items.length})`
           }
           onPress={confirmSubmit}
           disabled={items.length === 0}
@@ -315,6 +405,7 @@ export default function ScanScreen() {
         visible={entry !== null}
         barcode={entry?.barcode ?? null}
         product={entry?.product ?? null}
+        existing={entry?.existing ?? null}
         onCancel={() => setEntry(null)}
         onAdd={handleAdd}
       />
@@ -396,6 +487,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   bannerText: { color: colors.white, fontSize: font.label, fontWeight: '700' },
+  bannerSub: {
+    color: colors.white,
+    fontSize: font.small,
+    fontWeight: '600',
+    marginTop: 2,
+    opacity: 0.9,
+  },
   cameraWrap: {
     height: 300,
     backgroundColor: '#000',

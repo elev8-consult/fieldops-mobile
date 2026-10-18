@@ -1,5 +1,6 @@
 import { api } from '../api';
 import type { Product } from '../catalog';
+import { isOnline } from './network';
 import { KEYS, readJson, writeJson } from './storage';
 
 interface CachedCatalog {
@@ -9,6 +10,8 @@ interface CachedCatalog {
 
 let memoryIndex: Map<string, Product> | null = null;
 let memorySyncedAt: string | null = null;
+let syncing: Promise<{ count: number }> | null = null;
+let syncedThisSession = false;
 
 function buildIndex(products: Product[]): Map<string, Product> {
   const map = new Map<string, Product>();
@@ -32,17 +35,28 @@ export async function loadCatalogCache(): Promise<void> {
 
 /** Download the full barcode catalog and persist it for offline scanning. */
 export async function syncCatalog(): Promise<{ count: number }> {
-  const { data } = await api.get<CachedCatalog>('/products/catalog', {
-    timeout: 60000,
+  const count = memoryIndex?.size ?? 0;
+  if (!isOnline() || syncedThisSession) return { count };
+  if (syncing) return syncing;
+
+  syncing = (async () => {
+    const { data } = await api.get<CachedCatalog>('/products/catalog', {
+      timeout: 60000,
+    });
+    const products = data?.products ?? [];
+    memoryIndex = buildIndex(products);
+    memorySyncedAt = data?.syncedAt ?? new Date().toISOString();
+    await writeJson(KEYS.catalog, {
+      syncedAt: memorySyncedAt,
+      products,
+    } satisfies CachedCatalog);
+    syncedThisSession = true;
+    return { count: products.length };
+  })().finally(() => {
+    syncing = null;
   });
-  const products = data?.products ?? [];
-  memoryIndex = buildIndex(products);
-  memorySyncedAt = data?.syncedAt ?? new Date().toISOString();
-  await writeJson(KEYS.catalog, {
-    syncedAt: memorySyncedAt,
-    products,
-  } satisfies CachedCatalog);
-  return { count: products.length };
+
+  return syncing;
 }
 
 /** Look a barcode up in the local cache. Null when not cached. */

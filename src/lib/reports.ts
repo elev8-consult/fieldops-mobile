@@ -55,3 +55,34 @@ export async function submitVisit(
   );
   return data;
 }
+
+export interface TodayVisit {
+  outletId: string;
+  clientSubmissionId: string | null;
+  items: VisitItemPayload[];
+}
+
+/** Items already saved for this store today. */
+export async function fetchTodayVisit(outletId: string): Promise<TodayVisit> {
+  const { data } = await api.get<TodayVisit>(
+    `/reports/mobile/outlets/${outletId}`,
+  );
+  return data;
+}
+
+/**
+ * Create or replace today's visit. `items` is the full list, with any
+ * quantities the user added already included in each line.
+ */
+export async function saveVisit(
+  payload: SubmitVisitPayload,
+): Promise<{ reportId: string }> {
+  const { data } = await api.put<{ reportId: string }>(
+    `/reports/mobile/outlets/${payload.outletId}`,
+    {
+      clientSubmissionId: payload.clientSubmissionId,
+      items: payload.items,
+    },
+  );
+  return data;
+}

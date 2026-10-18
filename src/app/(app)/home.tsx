@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   RefreshControl,
   SectionList,
@@ -14,9 +15,20 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { apiErrorMessage } from '@/lib/api';
 import { loadCatalogCache, syncCatalog } from '@/lib/offline/catalogCache';
+import { isOnline } from '@/lib/offline/network';
 import { useNetwork } from '@/lib/offline/useNetwork';
 import { KEYS, readJson, writeJson } from '@/lib/offline/storage';
-import { fetchMobileSummary, type SummaryOutlet } from '@/lib/reports';
+import {
+  beirutToday,
+  readVisitCache,
+  writeVisitCache,
+} from '@/lib/offline/visitCache';
+import {
+  fetchMobileSummary,
+  fetchTodayVisit,
+  type SummaryOutlet,
+  type VisitItemPayload,
+} from '@/lib/reports';
 import { useAuthStore } from '@/store/auth.store';
 import { useQueueStore } from '@/store/queue.store';
 import { useVisitStore } from '@/store/visit.store';
@@ -37,8 +49,10 @@ export default function HomeScreen() {
   const user = useAuthStore((s) => s.user);
   const signOut = useAuthStore((s) => s.signOut);
   const setOutlet = useVisitStore((s) => s.setOutlet);
+  const setVisit = useVisitStore((s) => s.setVisit);
   const reset = useVisitStore((s) => s.reset);
   const [search, setSearch] = useState('');
+  const [openingId, setOpeningId] = useState<string | null>(null);
 
   const { online } = useNetwork();
   const pending = useQueueStore((s) => s.pending);
@@ -59,7 +73,6 @@ export default function HomeScreen() {
       await writeJson(KEYS.outlets, data);
       return data;
     },
-    retry: 1,
   });
 
   // Restore cached data on mount, and refresh the barcode catalog when online.
@@ -83,10 +96,86 @@ export default function HomeScreen() {
 
   const data = summaryQ.data ?? cachedSummary ?? undefined;
 
-  function startVisit(outlet: SummaryOutlet) {
-    reset();
-    setOutlet({ id: outlet.id, name: outlet.name, regionName: outlet.regionName });
-    router.push('/(app)/scan');
+  function toLines(items: VisitItemPayload[]) {
+    return items.map((item) => ({
+      productId: item.productId,
+      barcode: item.barcode,
+      productName: item.productNameRaw,
+      quantity: item.quantity,
+      expiryDate: item.expiryDate,
+    }));
+  }
+
+  async function startVisit(outlet: SummaryOutlet) {
+    if (openingId) return;
+    setOpeningId(outlet.id);
+    try {
+      const queued = useQueueStore
+        .getState()
+        .pending.find((v) => v.outletId === outlet.id);
+      let lines: ReturnType<typeof toLines> | null = null;
+      let submissionId: string | null = null;
+
+      if (queued) {
+        lines = toLines(queued.items);
+        submissionId = queued.clientSubmissionId ?? null;
+      } else if (isOnline()) {
+        try {
+          const remote = await fetchTodayVisit(outlet.id);
+          if (remote.items.length > 0) {
+            lines = toLines(remote.items);
+            submissionId = remote.clientSubmissionId;
+            await writeVisitCache({
+              date: beirutToday(),
+              outletId: outlet.id,
+              clientSubmissionId: submissionId,
+              items: remote.items,
+            });
+          }
+        } catch (err) {
+          const cached = await readVisitCache(outlet.id);
+          if (cached && cached.items.length > 0) {
+            lines = toLines(cached.items);
+            submissionId = cached.clientSubmissionId;
+          } else if (outlet.visitedToday) {
+            Alert.alert(
+              'Could not open this visit',
+              apiErrorMessage(err, 'Connect to the internet and try again.'),
+            );
+            return;
+          }
+        }
+      } else {
+        const cached = await readVisitCache(outlet.id);
+        if (cached && cached.items.length > 0) {
+          lines = toLines(cached.items);
+          submissionId = cached.clientSubmissionId;
+        } else if (outlet.visitedToday) {
+          Alert.alert(
+            'Connect to edit this store',
+            'This visit is saved, but the items are not on this phone yet. Connect once and open the store. After that you can add to it with no signal.',
+          );
+          return;
+        }
+      }
+
+      reset();
+      setOutlet({
+        id: outlet.id,
+        name: outlet.name,
+        regionName: outlet.regionName,
+      });
+      if (lines && lines.length > 0) {
+        setVisit({
+          items: lines,
+          clientSubmissionId: submissionId,
+          editing: true,
+        });
+      }
+      router.push('/(app)/scan');
+    } finally {
+      setOpeningId(null);
+    }
   }
 
   const sections = useMemo(() => {
@@ -107,6 +196,19 @@ export default function HomeScreen() {
   const visited = data?.visitedCount ?? 0;
   const pct = assigned > 0 ? Math.round((visited / assigned) * 100) : 0;
   const allDone = assigned > 0 && visited >= assigned;
+
+  // Paused queries are not "loading". Without a saved list, say so instead of
+  // spinning until a timeout that will never succeed.
+  if (!data && !online) {
+    return (
+      <SafeAreaView style={[styles.safe, styles.center]} edges={['bottom']}>
+        <Text style={styles.errorText}>
+          No internet, and no saved store list on this phone yet. Connect once
+          so your stores can be downloaded.
+        </Text>
+      </SafeAreaView>
+    );
+  }
 
   if (summaryQ.isLoading && !data) {
     return (
@@ -259,7 +361,8 @@ export default function HomeScreen() {
               section.done && styles.outletRowDone,
               pressed && { backgroundColor: colors.primarySoft },
             ]}
-            onPress={() => startVisit(item)}
+            onPress={() => void startVisit(item)}
+            disabled={openingId !== null}
           >
             <View style={styles.flex}>
               <Text
@@ -271,8 +374,10 @@ export default function HomeScreen() {
                 <Text style={styles.outletRegion}>{item.regionName}</Text>
               )}
             </View>
-            {section.done ? (
-              <Text style={styles.check}>✓</Text>
+            {openingId === item.id ? (
+              <ActivityIndicator color={colors.primary} />
+            ) : section.done ? (
+              <Text style={styles.editHint}>Edit</Text>
             ) : (
               <Text style={styles.chevron}>›</Text>
             )}
@@ -410,17 +515,17 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     minHeight: font.tapTarget,
   },
-  outletRowDone: { opacity: 0.65, borderColor: colors.success },
+  outletRowDone: { borderColor: colors.success },
+  editHint: {
+    fontSize: font.label,
+    fontWeight: '800',
+    color: colors.primary,
+    marginLeft: spacing.sm,
+  },
   outletName: { fontSize: font.body, fontWeight: '700', color: colors.text },
   outletNameDone: { color: colors.textMuted },
   outletRegion: { fontSize: font.small, color: colors.textMuted, marginTop: 2 },
   chevron: { fontSize: 28, color: colors.textMuted, marginLeft: spacing.sm },
-  check: {
-    fontSize: 22,
-    color: colors.success,
-    fontWeight: '800',
-    marginLeft: spacing.sm,
-  },
 
   emptyBox: {
     backgroundColor: colors.surface,

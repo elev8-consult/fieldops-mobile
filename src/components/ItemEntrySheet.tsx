@@ -3,6 +3,7 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -21,37 +22,57 @@ export interface NewItem {
   expiryDate: string | null;
 }
 
+export interface ExistingLine {
+  key: string;
+  quantity: number;
+  expiryDate: string | null;
+  productName: string;
+}
+
 interface Props {
   visible: boolean;
   barcode: string | null;
   /** The matched catalog product, or null if the barcode is unknown. */
   product: Product | null;
+  /** Set when this product is already on the visit. */
+  existing?: ExistingLine | null;
   onCancel: () => void;
-  onAdd: (item: NewItem) => void;
+  onAdd: (item: NewItem & { replaceKey?: string }) => void;
 }
 
 export function ItemEntrySheet({
   visible,
   barcode,
   product,
+  existing,
   onCancel,
   onAdd,
 }: Props) {
-  const isUnknown = !product;
+  const isUnknown = !product && !existing;
   const [name, setName] = useState('');
   const [qty, setQty] = useState('');
   const [month, setMonth] = useState('');
   const [year, setYear] = useState('');
+  /** When adding onto a line, the typed number replaces the total instead of adding. */
+  const [setTotal, setSetTotal] = useState(false);
 
   // Reset fields each time the sheet opens for a new scan.
   useEffect(() => {
     if (visible) {
-      setName(product?.canonicalName ?? '');
+      setName(product?.canonicalName ?? existing?.productName ?? '');
       setQty('');
-      setMonth('');
-      setYear('');
+      setSetTotal(false);
+      const expiry = existing?.expiryDate;
+      if (expiry) {
+        const [y, m] = expiry.split('-');
+        setYear(y ?? '');
+        setMonth(m ? String(Number(m)) : '');
+      } else {
+        setMonth('');
+        setYear('');
+      }
     }
-  }, [visible, product]);
+  }, [visible, product, existing?.key, existing?.productName, existing?.expiryDate]);
 
   const quantity = parseInt(qty, 10);
   const qtyValid = Number.isFinite(quantity) && quantity > 0;
@@ -74,14 +95,41 @@ export function ItemEntrySheet({
       expiryStarted && expiryValid
         ? `${yearNum}-${String(monthNum).padStart(2, '0')}-01`
         : null;
-    onAdd({
+    const productName = isUnknown
+      ? name.trim()
+      : (product?.canonicalName ?? existing?.productName ?? name.trim());
+    const base = {
       productId: product?.id ?? null,
       barcode,
-      productName: isUnknown ? name.trim() : product!.canonicalName,
-      quantity,
+      productName,
       expiryDate,
+    };
+
+    if (!existing || setTotal) {
+      onAdd({
+        ...base,
+        quantity,
+        replaceKey: existing && setTotal ? existing.key : undefined,
+      });
+      return;
+    }
+
+    const sameExpiry = (expiryDate ?? null) === (existing.expiryDate ?? null);
+    if (!sameExpiry) {
+      // Different expiry is a separate line, so the earlier count stays.
+      onAdd({ ...base, quantity });
+      return;
+    }
+
+    onAdd({
+      ...base,
+      quantity: existing.quantity + quantity,
+      replaceKey: existing.key,
     });
   }
+
+  const addingOn = !!existing && !setTotal;
+  const newTotal = existing ? existing.quantity + (qtyValid ? quantity : 0) : quantity;
 
   return (
     <Modal
@@ -113,15 +161,24 @@ export function ItemEntrySheet({
               ) : (
                 <>
                   <Text style={styles.productName}>
-                    {product!.canonicalName}
+                    {product?.canonicalName ?? existing?.productName}
                   </Text>
-                  {product!.brandName && (
-                    <Text style={styles.brand}>{product!.brandName}</Text>
+                  {product?.brandName && (
+                    <Text style={styles.brand}>{product.brandName}</Text>
                   )}
                 </>
               )}
 
-              <Text style={styles.label}>Quantity</Text>
+              {existing && (
+                <Text style={styles.already}>
+                  Already counted: {existing.quantity}
+                  {addingOn && qtyValid ? `  ·  new total ${newTotal}` : ''}
+                </Text>
+              )}
+
+              <Text style={styles.label}>
+                {addingOn ? 'Add quantity' : 'Quantity'}
+              </Text>
               <TextInput
                 style={styles.input}
                 value={qty}
@@ -131,6 +188,25 @@ export function ItemEntrySheet({
                 keyboardType="number-pad"
                 autoFocus={!isUnknown}
               />
+              {existing && (
+                <Pressable
+                  onPress={() => {
+                    setSetTotal((on) => {
+                      const next = !on;
+                      setQty(next ? String(existing.quantity) : '');
+                      return next;
+                    });
+                  }}
+                  hitSlop={8}
+                  style={styles.switchMode}
+                >
+                  <Text style={styles.switchModeText}>
+                    {setTotal
+                      ? 'Add to the count instead'
+                      : 'Change the total instead'}
+                  </Text>
+                </Pressable>
+              )}
 
               <Text style={styles.label}>Expiry (optional)</Text>
               <View style={styles.expiryRow}>
@@ -170,7 +246,13 @@ export function ItemEntrySheet({
                 <View style={{ width: spacing.md }} />
                 <View style={styles.flex}>
                   <Button
-                    label="Add item"
+                    label={
+                      !existing
+                        ? 'Add item'
+                        : setTotal
+                          ? 'Save item'
+                          : 'Add to item'
+                    }
                     variant="success"
                     onPress={handleAdd}
                     disabled={!canAdd}
@@ -217,6 +299,18 @@ const styles = StyleSheet.create({
   },
   productName: { fontSize: font.h2, fontWeight: '800', color: colors.text },
   brand: { fontSize: font.body, color: colors.textMuted, marginTop: 2 },
+  already: {
+    fontSize: font.body,
+    fontWeight: '700',
+    color: colors.primaryDark,
+    marginTop: spacing.sm,
+  },
+  switchMode: { marginTop: spacing.sm, minHeight: 44, justifyContent: 'center' },
+  switchModeText: {
+    fontSize: font.label,
+    fontWeight: '700',
+    color: colors.primary,
+  },
   label: {
     fontSize: font.label,
     fontWeight: '600',
