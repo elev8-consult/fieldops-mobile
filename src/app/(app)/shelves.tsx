@@ -314,13 +314,25 @@ function Slot({
 
 type ZoomPreset = '0.5' | '1' | '2';
 
-function pickLens(lenses: string[], ...parts: string[]): string | undefined {
-  const lower = lenses.map((l) => ({ raw: l, key: l.toLowerCase() }));
-  for (const part of parts) {
-    const hit = lower.find((l) => l.key.includes(part.toLowerCase()));
-    if (hit) return hit.raw;
-  }
-  return undefined;
+/**
+ * Expo iOS `selectedLens` must be the camera's localizedName (e.g.
+ * "Back Ultra Wide Camera"), not AVFoundation type ids. Also avoid
+ * Dual/Triple virtual cameras: at zoom 0 they already show ultra-wide,
+ * so 0.5x and 1x look identical.
+ */
+function iosPhysicalLenses(lenses: string[]) {
+  const ultra = lenses.find((l) => /ultra/i.test(l));
+  const tele = lenses.find((l) => /tele/i.test(l));
+  const wide =
+    lenses.find((l) => /wide\s*angle/i.test(l)) ??
+    lenses.find((l) => {
+      const k = l.toLowerCase();
+      return (
+        !/ultra|tele|dual|triple|lidar|true\s*depth|front/i.test(k) &&
+        /back|camera|wide/i.test(k)
+      );
+    });
+  return { ultra, wide, tele };
 }
 
 function cameraSettings(
@@ -328,18 +340,19 @@ function cameraSettings(
   lenses: string[],
 ): { zoom: number; selectedLens?: string } {
   if (Platform.OS === 'ios') {
-    const ultra = pickLens(lenses, 'ultrawide', 'ultra wide');
-    const wide =
-      pickLens(lenses, 'wideangle', 'wide angle', 'wide') ??
-      'builtInWideAngleCamera';
-    const tele = pickLens(lenses, 'telephoto', 'tele');
-    if (preset === '0.5' && ultra) return { zoom: 0, selectedLens: ultra };
-    if (preset === '2' && tele) return { zoom: 0, selectedLens: tele };
-    // No matching lens → digital zoom on the wide camera.
-    return {
-      zoom: preset === '2' ? 0.35 : preset === '0.5' ? 0 : 0,
-      selectedLens: wide,
-    };
+    const { ultra, wide, tele } = iosPhysicalLenses(lenses);
+    if (preset === '0.5') {
+      if (ultra) return { zoom: 0, selectedLens: ultra };
+      // Virtual multi-cam at factor ~1 is already ultra-wide FOV.
+      return { zoom: 0, selectedLens: wide };
+    }
+    if (preset === '1') {
+      if (wide) return { zoom: 0, selectedLens: wide };
+      // Dual/Triple only: Apple maps ~2.0 zoom factor to the 1x wide lens.
+      return { zoom: 0.18, selectedLens: lenses[0] };
+    }
+    if (tele) return { zoom: 0, selectedLens: tele };
+    return { zoom: 0.35, selectedLens: wide ?? lenses[0] };
   }
   // Android: Expo exposes digital zoom 0–1 on the main back camera.
   return {
@@ -400,6 +413,11 @@ function PhotoCapture({
           zoom={zoom}
           {...(selectedLens ? { selectedLens } : {})}
           onAvailableLensesChanged={({ lenses: next }) => setLenses(next)}
+          onCameraReady={() => {
+            void cameraRef.current?.getAvailableLensesAsync().then((next) => {
+              if (next?.length) setLenses(next);
+            });
+          }}
         />
       )}
       <View style={styles.captureTop}>
