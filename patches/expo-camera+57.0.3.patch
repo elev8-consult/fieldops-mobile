@@ -1,0 +1,136 @@
+diff --git a/node_modules/expo-camera/ios/Current/CameraSessionManager.swift b/node_modules/expo-camera/ios/Current/CameraSessionManager.swift
+--- a/node_modules/expo-camera/ios/Current/CameraSessionManager.swift
++++ b/node_modules/expo-camera/ios/Current/CameraSessionManager.swift
+@@ -34,6 +34,8 @@
+   private var photoOutput: AVCapturePhotoOutput?
+   private var videoFileOutput: AVCaptureMovieFileOutput?
+   private var runtimeErrorTask: Task<Void, Never>?
++  private var focusTask: Task<Void, Never>?
++  private var lastSubjectFocusAt: TimeInterval = 0
+ 
+   init(delegate: CameraSessionManagerDelegate) {
+     self.delegate = delegate
+@@ -95,7 +97,7 @@
+       addDevice(selectedDevice)
+     } else {
+       let device = delegate.presetCamera == .back
+-      ? deviceDiscovery.defaultBackCamera
++      ? (switchingBackCamera() ?? deviceDiscovery.defaultBackCamera)
+       : deviceDiscovery.defaultFrontCamera
+ 
+       if let device {
+@@ -104,6 +106,27 @@
+     }
+   }
+ 
++  /// A virtual back camera switches between wide and ultra-wide as the phone
++  /// moves, so a barcode can be sharp up close and at arm's length.
++  private func switchingBackCamera() -> AVCaptureDevice? {
++    let types: [AVCaptureDevice.DeviceType] = [
++      .builtInTripleCamera,
++      .builtInDualWideCamera,
++      .builtInDualCamera,
++    ]
++    let discovered = AVCaptureDevice.DiscoverySession(
++      deviceTypes: types,
++      mediaType: .video,
++      position: .back
++    ).devices
++    for type in types {
++      if let match = discovered.first(where: { $0.deviceType == type }) {
++        return match
++      }
++    }
++    return nil
++  }
++
+   func updateCameraIsActive() {
+     guard let delegate else {
+       return
+@@ -201,14 +224,59 @@
+     do {
+       try device.lockForConfiguration()
+       defer { device.unlockForConfiguration() }
+-      if device.isFocusModeSupported(delegate.autoFocus), device.focusMode != delegate.autoFocus {
+-        device.focusMode = delegate.autoFocus
++      let center = CGPoint(x: 0.5, y: 0.5)
++      if device.isFocusPointOfInterestSupported {
++        device.focusPointOfInterest = center
+       }
++      if device.isExposurePointOfInterestSupported {
++        device.exposurePointOfInterest = center
++      }
++      // Keep hunting while the phone moves. A locked near range stays soft
++      // when the barcode is farther away.
++      let mode: AVCaptureDevice.FocusMode = device.isFocusModeSupported(.continuousAutoFocus)
++        ? .continuousAutoFocus
++        : delegate.autoFocus
++      if device.isFocusModeSupported(mode) {
++        device.focusMode = mode
++      }
++      if device.isExposureModeSupported(.continuousAutoExposure) {
++        device.exposureMode = .continuousAutoExposure
++      }
++      if device.isAutoFocusRangeRestrictionSupported {
++        device.autoFocusRangeRestriction = .none
++      }
++      if device.isSmoothAutoFocusSupported {
++        device.isSmoothAutoFocusEnabled = true
++      }
++      device.isSubjectAreaChangeMonitoringEnabled = true
+     } catch {
+       log.info("\(#function): \(error.localizedDescription)")
+     }
+   }
+ 
++  /// When the barcode moves in the frame, aim the lens at the center again.
++  private func watchSubjectArea() {
++    guard let device = captureDeviceInput?.device else {
++      return
++    }
++    focusTask?.cancel()
++    focusTask = Task { [weak self] in
++      let notes = NotificationCenter.default.notifications(
++        named: .AVCaptureDeviceSubjectAreaDidChange,
++        object: device
++      )
++      for await _ in notes {
++        guard let self else { return }
++        self.delegate?.sessionQueue.async {
++          let now = ProcessInfo.processInfo.systemUptime
++          if now - self.lastSubjectFocusAt < 0.45 { return }
++          self.lastSubjectFocusAt = now
++          self.setFocusMode()
++        }
++      }
++    }
++  }
++
+   func updateZoom() {
+     guard let device = captureDeviceInput?.device, let delegate else {
+       return
+@@ -319,6 +387,7 @@
+ 
+   deinit {
+     runtimeErrorTask?.cancel()
++    focusTask?.cancel()
+   }
+ 
+   var currentPhotoOutput: AVCapturePhotoOutput? { photoOutput }
+@@ -352,6 +421,8 @@
+         session.addInput(deviceInput)
+         captureDeviceInput = deviceInput
+         updateZoom()
++        setFocusMode()
++        watchSubjectArea()
+       }
+     } catch {
+       delegate.onMountError(["message": "Camera could not be started - \(error.localizedDescription)"])
+@@ -416,5 +487,7 @@
+     delegate.configurePreviewRotation()
+     delegate.barcodeScanner?.maybeStartBarcodeScanning()
+     enableTorch()
++    setFocusMode()
++    watchSubjectArea()
+   }
+ }

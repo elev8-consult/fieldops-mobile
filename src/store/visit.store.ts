@@ -9,6 +9,8 @@ export interface VisitItem {
   productName: string;
   quantity: number;
   expiryDate: string | null; // YYYY-MM-DD
+  brandId: string | null;
+  brandName: string | null;
 }
 
 interface VisitState {

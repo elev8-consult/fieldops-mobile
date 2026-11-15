@@ -5,7 +5,7 @@ import {
   useCameraPermissions,
   type BarcodeScanningResult,
 } from 'expo-camera';
-import { useNavigation, useRouter } from 'expo-router';
+import { useIsFocused, useNavigation, useRouter } from 'expo-router';
 import { usePreventRemove } from 'expo-router/react-navigation';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -28,6 +28,7 @@ import { resolveBarcode, type Product } from '@/lib/catalog';
 import { beirutToday, writeVisitCache } from '@/lib/offline/visitCache';
 import { newSubmissionId, saveVisit } from '@/lib/reports';
 import { useQueueStore } from '@/store/queue.store';
+import { useShelfStore } from '@/store/shelf.store';
 import { useVisitStore, type VisitItem } from '@/store/visit.store';
 import { colors, font, radius, spacing } from '@/theme';
 
@@ -53,6 +54,7 @@ function isOffline(err: unknown): boolean {
 export default function ScanScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const focused = useIsFocused();
   const qc = useQueryClient();
   const enqueue = useQueueStore((s) => s.enqueue);
   const discardOutlet = useQueueStore((s) => s.discardOutlet);
@@ -63,10 +65,15 @@ export default function ScanScreen() {
   const updateItem = useVisitStore((s) => s.updateItem);
   const removeItem = useVisitStore((s) => s.removeItem);
   const reset = useVisitStore((s) => s.reset);
+  const shelfPhotos = useShelfStore((s) => s.photos);
+  const loadShelf = useShelfStore((s) => s.load);
 
   // usePreventRemove (not a bare beforeRemove listener) is required so the
   // native iOS back button and swipe gesture are blocked, not just reported.
   const [leaving, setLeaving] = useState(false);
+  // Android can crash if CameraX is still bound while we Alert + navigate away.
+  const [cameraOn, setCameraOn] = useState(true);
+  const submittingRef = useRef(false);
   usePreventRemove(items.length > 0 && !leaving, ({ data }) => {
     Alert.alert(
       'Discard scanned items?',
@@ -77,6 +84,7 @@ export default function ScanScreen() {
           text: 'Discard',
           style: 'destructive',
           onPress: () => {
+            setCameraOn(false);
             reset();
             navigation.dispatch(data.action);
           },
@@ -88,6 +96,14 @@ export default function ScanScreen() {
   useEffect(() => {
     if (leaving) router.replace('/(app)/home');
   }, [leaving, router]);
+
+  useEffect(() => {
+    if (focused && !leaving && !submittingRef.current) setCameraOn(true);
+  }, [focused, leaving]);
+
+  useEffect(() => {
+    if (outlet?.id) void loadShelf(outlet.id);
+  }, [outlet?.id, loadShelf]);
 
   const [permission, requestPermission] = useCameraPermissions();
   const [looking, setLooking] = useState(false);
@@ -120,8 +136,8 @@ export default function ScanScreen() {
           sku: null,
           barcode: item.barcode,
           unit: null,
-          brandId: '',
-          brandName: null,
+          brandId: item.brandId ?? '',
+          brandName: item.brandName,
         }
       : null;
     setEntry({
@@ -195,6 +211,8 @@ export default function ScanScreen() {
       productName: item.productName,
       quantity: item.quantity,
       expiryDate: item.expiryDate,
+      brandId: entry?.product?.brandId || null,
+      brandName: entry?.product?.brandName ?? null,
     };
     if (item.replaceKey) updateItem(item.replaceKey, next);
     else addItem(next);
@@ -271,7 +289,11 @@ export default function ScanScreen() {
         ],
       );
     },
-    onError: (e) => Alert.alert('Submit failed', apiErrorMessage(e)),
+    onError: (e) => {
+      submittingRef.current = false;
+      setCameraOn(true);
+      Alert.alert('Submit failed', apiErrorMessage(e));
+    },
   });
 
   function confirmSubmit() {
@@ -285,7 +307,12 @@ export default function ScanScreen() {
         { text: 'Keep scanning', style: 'cancel' },
         {
           text: editing ? 'Save' : 'Submit',
-          onPress: () => submit.mutate(),
+          onPress: () => {
+            // Release the camera before network + success navigation (Android).
+            submittingRef.current = true;
+            setCameraOn(false);
+            setTimeout(() => submit.mutate(), 150);
+          },
         },
       ],
     );
@@ -326,29 +353,44 @@ export default function ScanScreen() {
       </View>
 
       <View style={styles.cameraWrap}>
-        <CameraView
-          style={StyleSheet.absoluteFill}
-          barcodeScannerSettings={{ barcodeTypes: [...BARCODE_TYPES] }}
-          onBarcodeScanned={entry || looking ? undefined : handleScan}
-        />
+        {cameraOn && focused ? (
+          <CameraView
+            style={StyleSheet.absoluteFill}
+            active
+            facing="back"
+            autofocus="off"
+            barcodeScannerSettings={{ barcodeTypes: [...BARCODE_TYPES] }}
+            onBarcodeScanned={entry || looking ? undefined : handleScan}
+          />
+        ) : (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }]} />
+        )}
         <View style={styles.frame} pointerEvents="none" />
-        <View style={styles.scanHintWrap} pointerEvents="none">
-          <Text style={styles.scanHint}>
-            {looking ? 'Looking up product…' : 'Point at a barcode'}
-          </Text>
-        </View>
+        {looking && (
+          <View style={styles.scanHintWrap} pointerEvents="none">
+            <Text style={styles.scanHint}>Looking up product…</Text>
+          </View>
+        )}
 
         {/* Escape hatch for labels that will not scan (frost, glare, damage). */}
         <Pressable
           style={styles.manualBtn}
           onPress={() => setManualOpen(true)}
-          disabled={looking}
+          disabled={looking || !cameraOn}
         >
           <Text style={styles.manualBtnText}>⌨  Type barcode instead</Text>
         </Pressable>
       </View>
 
       <View style={styles.listSection}>
+        <Pressable
+          style={styles.shelfBtn}
+          onPress={() => router.push('/(app)/shelves')}
+        >
+          <Text style={styles.shelfBtnText}>
+            Shelf photos{shelfPhotos.length ? ` (${shelfPhotos.length})` : ''}
+          </Text>
+        </Pressable>
         <Text style={styles.listTitle}>Items added ({items.length})</Text>
         <FlatList
           data={items}
@@ -511,7 +553,7 @@ const styles = StyleSheet.create({
   },
   scanHintWrap: {
     position: 'absolute',
-    bottom: spacing.md,
+    top: spacing.md,
     left: 0,
     right: 0,
     alignItems: 'center',
@@ -585,6 +627,21 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   listSection: { flex: 1, padding: spacing.lg },
+  shelfBtn: {
+    minHeight: font.tapTarget,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.md,
+  },
+  shelfBtnText: {
+    color: colors.primaryDark,
+    fontSize: font.body,
+    fontWeight: '800',
+  },
   listTitle: {
     fontSize: font.label,
     fontWeight: '800',

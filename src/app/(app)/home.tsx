@@ -103,6 +103,8 @@ export default function HomeScreen() {
       productName: item.productNameRaw,
       quantity: item.quantity,
       expiryDate: item.expiryDate,
+      brandId: item.brandId ?? null,
+      brandName: item.brandName ?? null,
     }));
   }
 

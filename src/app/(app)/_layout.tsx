@@ -13,6 +13,7 @@ export default function AppLayout() {
     >
       <Stack.Screen name="home" options={{ title: 'Select outlet' }} />
       <Stack.Screen name="scan" options={{ title: 'Scan products' }} />
+      <Stack.Screen name="shelves" options={{ title: 'Shelf photos' }} />
     </Stack>
   );
 }

@@ -30,7 +30,9 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.CAMERA",
+        "android.permission.CAMERA"
+      ],
+      "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -43,8 +45,9 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "I Prom uses the camera to scan product barcodes.",
-          "microphonePermission": false
+          "cameraPermission": "I Prom uses the camera to scan product barcodes and photograph shelves.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ],
       [

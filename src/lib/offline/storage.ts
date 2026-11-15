@@ -7,6 +7,7 @@ export const KEYS = {
   queue: 'fieldops.queue.v1',
   outlets: 'fieldops.outlets.v1',
   visits: 'fieldops.visits.v1',
+  shelfPhotos: 'fieldops.shelfPhotos.v1',
 } as const;
 
 export async function readJson<T>(key: string): Promise<T | null> {

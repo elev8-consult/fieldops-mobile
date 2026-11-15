@@ -59,6 +59,25 @@ export async function syncCatalog(): Promise<{ count: number }> {
   return syncing;
 }
 
+/** Brands in the offline catalog whose name matches the search. */
+export function searchCatalogBrands(
+  query: string,
+): Array<{ id: string; name: string }> {
+  const q = query.trim().toLowerCase();
+  if (q.length < 2 || !memoryIndex) return [];
+  const brands = new Map<string, string>();
+  for (const product of memoryIndex.values()) {
+    const name = product.brandName?.trim();
+    if (!product.brandId || !name) continue;
+    if (!name.toLowerCase().includes(q)) continue;
+    brands.set(product.brandId, name);
+  }
+  return [...brands.entries()]
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, 8);
+}
+
 /** Look a barcode up in the local cache. Null when not cached. */
 export function lookupCachedBarcode(barcode: string): Product | null {
   if (!memoryIndex) return null;

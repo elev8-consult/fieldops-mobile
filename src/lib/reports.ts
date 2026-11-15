@@ -6,6 +6,19 @@ export interface VisitItemPayload {
   productNameRaw: string;
   quantity: number;
   expiryDate: string | null; // YYYY-MM-DD
+  brandId?: string | null;
+  brandName?: string | null;
+}
+
+/** Fields the visit API accepts. Brand is kept on the phone only. */
+function visitItemBody(item: VisitItemPayload) {
+  return {
+    productId: item.productId,
+    barcode: item.barcode,
+    productNameRaw: item.productNameRaw,
+    quantity: item.quantity,
+    expiryDate: item.expiryDate,
+  };
 }
 
 export interface SubmitVisitPayload {
@@ -51,7 +64,7 @@ export async function submitVisit(
 ): Promise<{ reportId: string }> {
   const { data } = await api.post<{ reportId: string }>(
     '/reports/mobile',
-    payload,
+    { ...payload, items: payload.items.map(visitItemBody) },
   );
   return data;
 }
@@ -81,7 +94,7 @@ export async function saveVisit(
     `/reports/mobile/outlets/${payload.outletId}`,
     {
       clientSubmissionId: payload.clientSubmissionId,
-      items: payload.items,
+      items: payload.items.map(visitItemBody),
     },
   );
   return data;
