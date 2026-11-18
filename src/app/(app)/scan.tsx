@@ -25,6 +25,7 @@ import { Button } from '@/components/Button';
 import { ItemEntrySheet, type ExistingLine, type NewItem } from '@/components/ItemEntrySheet';
 import { apiErrorMessage } from '@/lib/api';
 import { resolveBarcode, type Product } from '@/lib/catalog';
+import { isOnline } from '@/lib/offline/network';
 import { beirutToday, writeVisitCache } from '@/lib/offline/visitCache';
 import { newSubmissionId, saveVisit } from '@/lib/reports';
 import { useQueueStore } from '@/store/queue.store';
@@ -67,6 +68,9 @@ export default function ScanScreen() {
   const reset = useVisitStore((s) => s.reset);
   const shelfPhotos = useShelfStore((s) => s.photos);
   const loadShelf = useShelfStore((s) => s.load);
+  const flushShelf = useShelfStore((s) => s.flush);
+  const hasShelfPhotos = shelfPhotos.length > 0;
+  const canSubmit = items.length > 0 || hasShelfPhotos;
 
   // usePreventRemove (not a bare beforeRemove listener) is required so the
   // native iOS back button and swipe gesture are blocked, not just reported.
@@ -247,20 +251,31 @@ export default function ScanScreen() {
       };
 
       try {
-        await saveVisit(payload);
+        // Shelf pictures sync on their own; flush before leaving so photos-only
+        // visits still reach the server.
+        if (!isOnline() && payload.items.length === 0) {
+          await writeVisitCache(cache);
+          return { queued: true };
+        }
+        await flushShelf();
+        if (payload.items.length > 0) {
+          await saveVisit(payload);
+          await discardOutlet(payload.outletId);
+        }
         await writeVisitCache(cache);
-        await discardOutlet(payload.outletId);
         return { queued: false };
       } catch (err) {
         // No network / server unreachable → keep the work safely on the device
         // and let the sync engine deliver it once we are back online.
         if (isOffline(err)) {
-          await enqueue({
-            outletId: payload.outletId,
-            outletName: outlet!.name,
-            items: payload.items,
-            clientSubmissionId: payload.clientSubmissionId,
-          });
+          if (payload.items.length > 0) {
+            await enqueue({
+              outletId: payload.outletId,
+              outletName: outlet!.name,
+              items: payload.items,
+              clientSubmissionId: payload.clientSubmissionId,
+            });
+          }
           await writeVisitCache(cache);
           return { queued: true };
         }
@@ -271,13 +286,22 @@ export default function ScanScreen() {
       // Refresh the home screen's progress and "visited today" list.
       void qc.invalidateQueries({ queryKey: ['mobile-summary'] });
       const count = items.length;
+      const photoNote = hasShelfPhotos
+        ? count === 0
+          ? 'Shelf photos saved for this store.'
+          : ` ${shelfPhotos.length} shelf photo(s) included.`
+        : '';
       Alert.alert(
         queued ? 'Saved on your phone' : editing ? 'Visit updated' : 'Visit submitted',
         queued
-          ? `${count} item(s) saved. They will be sent automatically when you have internet.`
-          : editing
-            ? `${count} item(s) saved for this store.`
-            : `${count} item(s) saved.`,
+          ? count > 0
+            ? `${count} item(s) saved. They will be sent automatically when you have internet.`
+            : 'Shelf photos are on your phone and will upload when you have internet.'
+          : count > 0
+            ? editing
+              ? `${count} item(s) saved for this store.${photoNote}`
+              : `${count} item(s) saved.${photoNote}`
+            : photoNote || 'Visit saved.',
         [
           {
             text: 'OK',
@@ -297,25 +321,26 @@ export default function ScanScreen() {
   });
 
   function confirmSubmit() {
-    if (items.length === 0) return;
-    Alert.alert(
-      editing ? 'Update this visit?' : 'Submit visit?',
-      editing
-        ? `Save ${items.length} item(s) for ${outlet?.name ?? 'this outlet'}? This updates what you already sent today.`
-        : `Send ${items.length} item(s) for ${outlet?.name ?? 'this outlet'}?`,
-      [
-        { text: 'Keep scanning', style: 'cancel' },
-        {
-          text: editing ? 'Save' : 'Submit',
-          onPress: () => {
-            // Release the camera before network + success navigation (Android).
-            submittingRef.current = true;
-            setCameraOn(false);
-            setTimeout(() => submit.mutate(), 150);
-          },
+    if (!canSubmit) return;
+    const store = outlet?.name ?? 'this outlet';
+    const message =
+      items.length > 0
+        ? editing
+          ? `Save ${items.length} item(s) for ${store}? This updates what you already sent today.`
+          : `Send ${items.length} item(s) for ${store}?`
+        : `Finish this visit for ${store} with shelf photos only (no products scanned)?`;
+    Alert.alert(editing ? 'Update this visit?' : 'Submit visit?', message, [
+      { text: 'Keep scanning', style: 'cancel' },
+      {
+        text: editing ? 'Save' : 'Submit',
+        onPress: () => {
+          // Release the camera before network + success navigation (Android).
+          submittingRef.current = true;
+          setCameraOn(false);
+          setTimeout(() => submit.mutate(), 150);
         },
-      ],
-    );
+      },
+    ]);
   }
 
   // ── Camera permission states ─────────────────────────────────────────
@@ -429,16 +454,20 @@ export default function ScanScreen() {
       <View style={styles.footer}>
         <Button
           label={
-            items.length === 0
+            items.length > 0
               ? editing
-                ? 'Save visit'
-                : 'Submit visit'
-              : editing
                 ? `Save visit (${items.length})`
                 : `Submit visit (${items.length})`
+              : hasShelfPhotos
+                ? editing
+                  ? 'Save photos visit'
+                  : 'Submit photos visit'
+                : editing
+                  ? 'Save visit'
+                  : 'Submit visit'
           }
           onPress={confirmSubmit}
-          disabled={items.length === 0}
+          disabled={!canSubmit}
           loading={submit.isPending}
         />
       </View>

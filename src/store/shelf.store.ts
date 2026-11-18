@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import {
   deleteShelfPhoto,
   fetchTodayShelfPhotos,
+  updateShelfPhotoNotes,
   uploadShelfPhoto,
   type ShelfKind,
 } from '@/lib/shelfPhotos';
@@ -29,6 +30,7 @@ export interface ShelfShot {
   localUri: string | null;
   remoteUrl: string | null;
   uploaded: boolean;
+  notes: string;
 }
 
 type StoredShot = Omit<ShelfShot, 'shelfId'> & { shelfId?: string };
@@ -67,6 +69,13 @@ interface ShelfState {
     shelfId: string;
     kind: ShelfKind;
     tempUri: string;
+  }) => Promise<void>;
+  setNotes: (shot: {
+    outletId: string;
+    brandId: string;
+    shelfId: string;
+    kind: ShelfKind;
+    notes: string;
   }) => Promise<void>;
   removeShot: (shot: {
     outletId: string;
@@ -124,9 +133,10 @@ function reconcile(
 
   const legacyShelf = new Map<string, string>();
   const photos: ShelfShot[] = localPhotos.map((photo) => {
+    const notes = photo.notes ?? '';
     if (photo.shelfId) {
       shelves = rememberShelf(shelves, photo.brandId, photo.shelfId);
-      return photo as ShelfShot;
+      return { ...(photo as ShelfShot), notes };
     }
     let shelfId = legacyShelf.get(photo.brandId);
     if (!shelfId) {
@@ -139,7 +149,7 @@ function reconcile(
       legacyShelf.set(photo.brandId, shelfId);
     }
     shelves = rememberShelf(shelves, photo.brandId, shelfId);
-    return { ...photo, shelfId };
+    return { ...photo, shelfId, notes };
   });
 
   const removedNext = removed.flatMap((key) => {
@@ -222,6 +232,7 @@ function mergeRemote(local: ShelfShot[], remote: ShelfShot[]): ShelfShot[] {
         ...shot,
         localUri: existing?.localUri ?? null,
         brandName: existing?.brandName || shot.brandName,
+        notes: existing?.notes || shot.notes || '',
         uploaded: true,
       });
       continue;
@@ -252,7 +263,10 @@ export const useShelfStore = create<ShelfState>((set, get) => ({
       set({
         outletId,
         date,
-        photos: (stored?.photos ?? []) as ShelfShot[],
+        photos: ((stored?.photos ?? []) as ShelfShot[]).map((photo) => ({
+          ...photo,
+          notes: photo.notes ?? '',
+        })),
         extraBrands: stored?.extraBrands ?? [],
         shelves: stored?.shelves ?? [],
         removed: stored?.removed ?? [],
@@ -273,6 +287,7 @@ export const useShelfStore = create<ShelfState>((set, get) => ({
           localUri: null,
           remoteUrl: photo.url,
           uploaded: true,
+          notes: photo.notes ?? '',
         }));
         fetched = true;
       } catch {
@@ -425,6 +440,7 @@ export const useShelfStore = create<ShelfState>((set, get) => ({
       localUri,
       remoteUrl: null,
       uploaded: false,
+      notes: previous?.notes ?? '',
     };
     const date = beirutToday();
     const photos = upsert(get().photos, shot);
@@ -439,6 +455,38 @@ export const useShelfStore = create<ShelfState>((set, get) => ({
     set({ outletId, date, photos, extraBrands, shelves, removed });
     await writeDay(outletId, { date, photos, extraBrands, shelves, removed });
     void get().flush();
+  },
+
+  setNotes: async ({ outletId, brandId, shelfId, kind, notes }) => {
+    const key = slotKey(brandId, shelfId, kind);
+    const shot = get().photos.find(
+      (photo) => slotKey(photo.brandId, photo.shelfId, photo.kind) === key,
+    );
+    if (!shot) return;
+    const trimmed = notes.trim();
+    const next: ShelfShot = { ...shot, notes: trimmed };
+    const photos = upsert(get().photos, next);
+    const date = get().date ?? beirutToday();
+    set({ photos });
+    await writeDay(outletId, {
+      date,
+      photos,
+      extraBrands: get().extraBrands,
+      shelves: get().shelves,
+      removed: get().removed,
+    });
+    if (!(shot.uploaded || shot.remoteUrl) || !isOnline()) return;
+    try {
+      await updateShelfPhotoNotes({
+        outletId,
+        brandId,
+        shelfId,
+        kind,
+        notes: trimmed,
+      });
+    } catch {
+      // Local note stays; next reconnect or edit can retry.
+    }
   },
 
   removeShot: async ({ outletId, brandId, shelfId, kind }) => {
@@ -525,6 +573,7 @@ export const useShelfStore = create<ShelfState>((set, get) => ({
             shelfId: shot.shelfId,
             kind: shot.kind,
             localUri: shot.localUri,
+            notes: shot.notes,
           });
           if (get().outletId !== outletId) return;
           const latest = get().photos.find(
@@ -543,6 +592,7 @@ export const useShelfStore = create<ShelfState>((set, get) => ({
             brandName: saved.brandName || latest.brandName,
             shelfId: saved.shelfId || latest.shelfId,
             remoteUrl: saved.url,
+            notes: saved.notes ?? latest.notes ?? '',
             uploaded: true,
           });
           set({ photos: photosNow });

@@ -35,6 +35,7 @@ export default function ShelvesScreen() {
   const addShelf = useShelfStore((s) => s.addShelf);
   const removeShelf = useShelfStore((s) => s.removeShelf);
   const saveShot = useShelfStore((s) => s.saveShot);
+  const setNotes = useShelfStore((s) => s.setNotes);
   const removeShot = useShelfStore((s) => s.removeShot);
   const flush = useShelfStore((s) => s.flush);
   const { online } = useNetwork();
@@ -186,6 +187,16 @@ export default function ShelvesScreen() {
                             kind: 'before',
                           });
                         }}
+                        onNotes={(notes) => {
+                          if (!outlet) return;
+                          void setNotes({
+                            outletId: outlet.id,
+                            brandId: brand.id,
+                            shelfId: shelf.shelfId,
+                            kind: 'before',
+                            notes,
+                          });
+                        }}
                       />
                       <Slot
                         label="After"
@@ -205,6 +216,16 @@ export default function ShelvesScreen() {
                             brandId: brand.id,
                             shelfId: shelf.shelfId,
                             kind: 'after',
+                          });
+                        }}
+                        onNotes={(notes) => {
+                          if (!outlet) return;
+                          void setNotes({
+                            outletId: outlet.id,
+                            brandId: brand.id,
+                            shelfId: shelf.shelfId,
+                            kind: 'after',
+                            notes,
                           });
                         }}
                       />
@@ -259,13 +280,20 @@ function Slot({
   shot,
   onPress,
   onRemove,
+  onNotes,
 }: {
   label: string;
   shot: ShelfShot | undefined;
   onPress: () => void;
   onRemove: () => void;
+  onNotes: (notes: string) => void;
 }) {
   const uri = shot?.localUri || shot?.remoteUrl;
+  const [draft, setDraft] = useState(shot?.notes ?? '');
+  useEffect(() => {
+    setDraft(shot?.notes ?? '');
+  }, [shot?.notes, uri]);
+
   return (
     <View style={styles.slot}>
       <View>
@@ -308,6 +336,18 @@ function Slot({
             : 'Saved on this phone'
           : 'Take photo'}
       </Text>
+      {uri ? (
+        <TextInput
+          value={draft}
+          onChangeText={setDraft}
+          onBlur={() => onNotes(draft)}
+          placeholder="Add a note"
+          placeholderTextColor={colors.textMuted}
+          style={styles.noteInput}
+          multiline
+          maxLength={500}
+        />
+      ) : null}
     </View>
   );
 }
@@ -593,6 +633,20 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   slotHint: { fontSize: font.small, color: colors.textMuted },
+  noteInput: {
+    marginTop: spacing.xs,
+    minHeight: 56,
+    maxHeight: 96,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    fontSize: font.small,
+    color: colors.text,
+    backgroundColor: colors.surface,
+    textAlignVertical: 'top',
+  },
   capture: {
     position: 'absolute',
     top: 0,
